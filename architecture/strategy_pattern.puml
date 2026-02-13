@@ -1,0 +1,201 @@
+@startuml strategy_pattern
+
+<style>
+classDiagram {
+  class {
+    BackgroundColor #f8f9fa
+    LineColor #343a40
+    RoundCorner 5
+    FontColor #212529
+  }
+  .protocol {
+    BackgroundColor #e3f2fd
+    LineColor #1565c0
+    FontStyle italic
+  }
+  .concrete {
+    BackgroundColor #e8f5e9
+    LineColor #2e7d32
+  }
+  .registry {
+    BackgroundColor #f3e5f5
+    LineColor #7b1fa2
+  }
+  .bootstrap {
+    BackgroundColor #fff3e0
+    LineColor #ef6c00
+  }
+  arrow {
+    LineColor #495057
+    FontColor #495057
+  }
+  note {
+    BackgroundColor #fff9c4
+    LineColor #fbc02d
+  }
+}
+</style>
+
+title Compareror — Strategy Pattern Implementation\n(current state)
+
+package "Context (directory_sync_model.py)" {
+    class DirectorySyncModel {
+        -_diff_mode: str = "two-phase"
+        -_scanner: DirectoryScanner | None
+        -_hash_provider: HashProvider | None
+        -_diff_strategy: DiffStrategy | None
+        -_sync_executor: SyncExecutor | None
+        -_dir1_snapshot: DirectorySnapshot | None
+        -_dir2_snapshot: DirectorySnapshot | None
+        -copy_empty_dirs: bool
+        -compiled_rules: list[CompiledRegexRule]
+        --
+        +set_directories(dir1, dir2)
+        +set_filters(ignore_hidden, copy_empty_dirs, compiled_rules)
+        +set_diff_mode(mode)
+        +compare_directories(): tuple
+        +synchronize(): dict
+        +rollback_changes(): list[str]
+        -_get_scanner(): DirectoryScanner
+        -_get_hash_provider(): HashProvider
+        -_get_diff_strategy(): DiffStrategy
+        -_get_sync_executor(): SyncExecutor
+        -_apply_dir1_rules(snapshot)
+    }
+}
+
+package "Bootstrap (bootstrap.py)" {
+    class "ensure_strategies_registered()" as Boot <<bootstrap>> {
+        Thread-safe, once-only
+        registration of all
+        default strategies
+    }
+}
+
+package "Service Locator (interfaces.py)" {
+    class "StrategyRegistry<T>" as Registry <<registry>> {
+        -_strategies: dict[str, T]
+        -_default_name: str | None
+        -_lock: RLock
+        --
+        +register(name, strategy, set_default)
+        +unregister(name): bool
+        +get(name): T | None
+        +get_default(): T | None
+        +set_default(name)
+        +list_names(): list[str]
+    }
+
+    note bottom of Registry
+      **Thread-safe** generic container.
+      Four global instances:
+      scanner_registry,
+      hash_provider_registry,
+      diff_strategy_registry,
+      sync_executor_registry
+    end note
+}
+
+package "Abstract Strategies — Protocols (interfaces.py)" {
+    interface DirectoryScanner <<protocol>> {
+        +scan(directory, exclude_path,
+        \tignore_hidden, stop_event,
+        \tprogress_callback): DirectorySnapshot
+    }
+    interface HashProvider <<protocol>> {
+        +calculate_hash(file_path): str | None
+        +calculate_hashes(files, stop_event,
+        \tprogress_callback): dict[Path, str]
+    }
+    interface DiffStrategy <<protocol>> {
+        +compare(source, target, hash_provider,
+        \tstop_event, progress_callback): DiffResult
+    }
+    interface SyncExecutor <<protocol>> {
+        +execute(diff, backup_dir, copy_empty_dirs,
+        \tstop_event, progress_callback,
+        \tstats_callback): SyncResult
+        +rollback(stop_event,
+        \tprogress_callback): list[str]
+    }
+}
+
+package "Concrete Strategies (strategies.py)" {
+    class DefaultDirectoryScanner <<concrete>> {
+        +scan(): uses os.scandir
+    }
+
+    class DefaultHashProvider <<concrete>> {
+        -chunk_size: int = 8192
+        -num_workers: int | None
+        +calculate_hash(): MD5
+        +calculate_hashes(): multiprocessing Pool
+    }
+    class CachingHashProvider <<concrete>> {
+        -_inner: HashProvider
+        -_cache: dict[(path, size, mtime), str]
+        +calculate_hash(): cached
+        +calculate_hashes(): cached batch
+    }
+
+    class FullHashDiffStrategy <<concrete>> {
+        Registry key: "strict"
+    }
+    class TwoPhaseDiffStrategy <<concrete>> {
+        Registry key: "two-phase"
+        DirectorySyncModel default mode
+    }
+    class FastDiffStrategy <<concrete>> {
+        Registry key: "fast"
+    }
+
+    class DefaultSyncExecutor <<concrete>> {
+        -num_workers: int | None
+        -debug_logging: bool = False
+        +execute(): parallel copy via Pool
+        \tstats callback throttled
+        +rollback(): restore from backup
+    }
+}
+
+' === Bootstrap ===
+Boot --> Registry : register defaults once
+DirectorySyncModel ..> Boot : called in __init__
+
+' === Context → Registry ===
+DirectorySyncModel ..> Registry : lazy lookups via\n_get_scanner / _get_diff_strategy / etc.
+
+' === Registry holds protocols ===
+Registry o-- DirectoryScanner
+Registry o-- HashProvider
+Registry o-- DiffStrategy
+Registry o-- SyncExecutor
+
+' === Implementations ===
+DefaultDirectoryScanner ..|> DirectoryScanner
+DefaultHashProvider ..|> HashProvider
+CachingHashProvider ..|> HashProvider
+FullHashDiffStrategy ..|> DiffStrategy
+TwoPhaseDiffStrategy ..|> DiffStrategy
+FastDiffStrategy ..|> DiffStrategy
+DefaultSyncExecutor ..|> SyncExecutor
+
+' === Decorator ===
+CachingHashProvider o--> HashProvider : decorates (wraps inner)
+
+note right of CachingHashProvider
+  **Decorator Pattern**
+  Cache key: (path, size, mtime).
+  Registered as default
+  HashProvider.
+end note
+
+note top of DirectorySyncModel
+  **Lazy Initialization**
+  Strategies are fetched from
+  registry only on first access.
+  Snapshot caching invalidated
+  on path or filter change.
+end note
+
+@enduml

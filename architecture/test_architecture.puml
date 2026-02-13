@@ -1,0 +1,306 @@
+@startuml test_architecture
+
+<style>
+classDiagram {
+  class {
+    BackgroundColor #f8f9fa
+    LineColor #343a40
+    RoundCorner 5
+    FontColor #212529
+  }
+  .unit {
+    BackgroundColor #e8f5e9
+    LineColor #2e7d32
+  }
+  .integration {
+    BackgroundColor #e3f2fd
+    LineColor #1565c0
+  }
+  .ui {
+    BackgroundColor #f3e5f5
+    LineColor #7b1fa2
+  }
+  .regression {
+    BackgroundColor #fff3e0
+    LineColor #ef6c00
+  }
+  .fixture {
+    BackgroundColor #fce4ec
+    LineColor #c62828
+    FontStyle italic
+  }
+  arrow {
+    LineColor #495057
+    FontColor #495057
+  }
+  note {
+    BackgroundColor #fff9c4
+    LineColor #fbc02d
+  }
+}
+</style>
+
+title Compareror — Test Architecture\n(17 test files, 189 tests)
+
+legend top left
+  |<#e8f5e9>  | Unit Tests |
+  |<#e3f2fd>  | Integration Tests |
+  |<#f3e5f5>  | UI Tests (pytest-qt) |
+  |<#fff3e0>  | Regression Tests |
+  |<#fce4ec>  | Shared Fixtures |
+end legend
+
+package "Shared Fixtures (conftest.py)" <<fixture>> {
+  class conftest <<fixture>> {
+    +isolated_settings(monkeypatch, tmp_path) <<autouse>>
+    +temp_dir(tmp_path): dict
+    +sync_model(): DirectorySyncModel
+    +stop_events(): (Event, mp.Event)
+    +backup_dir(tmp_path): Path
+  }
+
+  note right of conftest
+    **isolated_settings** is **autouse**:
+    globally patches SettingsManager
+    to use tmp_path, preventing
+    local settings.yaml leaks.
+  end note
+}
+
+package "Domain Model Tests" {
+  class test_interfaces <<unit>> {
+    **TestFileMeta** (3 tests)
+      creation, with_hash, immutability
+    **TestDirectorySnapshot** (2 tests)
+      empty_snapshot, with_files
+    **TestDiffResult** (2 tests)
+      empty_diff, categorization
+    **TestSyncResult** (1 test)
+      to_dict
+    **TestStrategyRegistry** (8 tests)
+      register, default, set_default,
+      duplicate, unregister, list,
+      contains, len
+  }
+
+  class test_directory_sync_model <<unit>> {
+    Nested-dir validation (3 tests)
+      rejects_nested, rejects_inside,
+      accepts_siblings
+    Cache invalidation (3 tests)
+      dirs_change, same_dirs, filters
+    Diff mode (2 tests)
+      valid, invalid
+  }
+}
+
+package "Strategy Tests" {
+  class test_strategies <<unit>> {
+    **TestDefaultDirectoryScanner** (6 tests)
+      empty, files, subdirs,
+      hidden ignore/include, nonexistent
+    **TestDefaultHashProvider** (4 tests)
+      hash, same_content,
+      different_content, nonexistent
+    **TestCachingHashProvider** (3 tests)
+      caching, invalidation, clear
+    **TestDiffStrategies** (3 tests)
+      new_file, size_change, unchanged
+    **TestRegistries** (3 tests)
+      scanner, hash, diff defaults
+  }
+
+  class test_executor <<unit>> {
+    **TestDebugLogging** (2 tests)
+      disabled, enabled
+    **TestStatsThrottling** (2 tests)
+      items_capped, callback_updates
+    **TestExecutorErrors** (2 tests)
+      nonexistent_source, empty_diff
+    **TestExecutorRollback** (2 tests)
+      after_copy, after_replace
+  }
+
+  class test_utils <<unit>> {
+    **TestThrottledProgressCallback** (5 tests)
+      throttling, interval, flush,
+      context_manager, none_callback
+    **TestStopChecker** (6 tests)
+      no_event, not_set, set, interval,
+      force_check, stays_stopped
+    **TestBatchProcessor** (5 tests)
+      intervals, finish, increment,
+      no_callback, custom_format
+  }
+}
+
+package "Settings & Configuration Tests" {
+  class test_app_settings <<unit>> {
+    Settings load/save
+    Validation rules
+    Regex security (ReDoS)
+    diff_mode persistence
+  }
+
+  class test_settings_dialog_ui <<ui>> {
+    **TestDiffModeRadioButtons** (3 tests)
+      all_exist, labels, exclusive
+    **TestDiffModeDefaultLoad** (2 tests)
+      default_two_phase, collect
+    **TestDiffModeLoadFromConfig** (2 tests)
+      each_mode, invalid_fallback
+    **TestDiffModeUserInteraction** (2 tests)
+      click_collect, switch_multiple
+    **TestDiffModePersistence** (2 tests)
+      save_reload, yaml_key
+    **TestDiffModeImportExport** (1 test)
+      export_import_preserves
+  }
+
+  class test_about_dialog <<ui>> {
+    Version parsing helper
+    About dialog content sections
+    close button accept flow
+  }
+}
+
+package "UI Widget Tests" {
+  class test_lazy_directory_tree <<ui>> {
+    **TestHighlightProxyModel** (7 tests)
+      compiled_rules, none, empty,
+      highlight lifecycle, clear,
+      filter_no_rules, filter_no_model
+    **TestLazyDirectoryTreeWidget** (13 tests)
+      load basic/nonexistent/rules/
+      clears_old/highlights, set/clear/
+      remove group, hidden,
+      header label/alignment,
+      clear_state, base_path
+    **TestLegacyRetirement** (2 tests)
+      removed header compat API,
+      retired modules export no
+      legacy classes
+    **TestEmptyInitialState** (2 tests)
+      initial_no_items, clear_hides
+    **TestFilteringIntegration** (4 tests)
+      exclude, include, dirs_visible,
+      no_rules
+  }
+
+  class test_dracula_theme <<ui>> {
+    **TestDraculaTheme** (8 tests)
+      validation, normalization,
+      stylesheet, palette, apply,
+      switching, persistence, caching,
+      invalid_fallback
+    **TestDraculaThemeIntegration** (3 tests)
+      dialog_selection, switching,
+      load_settings
+  }
+}
+
+package "Integration Tests" {
+  class test_copying <<integration>> {
+    Full copy flow
+    File replacement
+  }
+
+  class test_concurrency <<integration>> {
+    Parallel execution
+    Thread safety
+  }
+
+  class test_cancel_rollback <<integration>> {
+    Cancel mid-sync
+    Rollback verification
+  }
+
+  class test_empty_dirs <<integration>> {
+    Ignored by default
+    Copied when enabled
+  }
+}
+
+package "UI Integration Tests" {
+  class test_main_window_integration <<ui>> {
+    compare_sync flow
+    stop_cancel_rollback stress
+    report_dialog updates
+    apply_settings_filters
+    trees_empty_on_startup
+    trees_populate_after_selection
+  }
+
+  class test_ui_integration <<ui>> {
+    full_sync_flow
+    stop_rollback_flow
+    backup_restore
+  }
+}
+
+package "Regression Tests" {
+  class test_stop_crash <<regression>> {
+    Worker pool stop event
+    race condition fix
+  }
+}
+
+' === Fixture dependencies ===
+test_directory_sync_model ..> conftest : sync_model, temp_dir
+test_strategies ..> conftest : stop_events
+test_executor ..> conftest : backup_dir
+test_copying ..> conftest : temp_dir
+test_concurrency ..> conftest : temp_dir, stop_events
+test_cancel_rollback ..> conftest : temp_dir
+test_empty_dirs ..> conftest : temp_dir
+test_main_window_integration ..> conftest : isolated_settings
+
+' === Coverage mapping (what source files are tested) ===
+note bottom of test_interfaces
+  **Covers:** sync/interfaces.py
+  FileMeta, DirectorySnapshot,
+  DiffResult, SyncResult,
+  StrategyRegistry
+end note
+
+note bottom of test_strategies
+  **Covers:** sync/strategies.py
+  All 7 concrete strategy
+  implementations
+end note
+
+note bottom of test_directory_sync_model
+  **Covers:**
+  sync/directory_sync_model.py
+  Facade validation & caching
+end note
+
+note bottom of test_lazy_directory_tree
+  **Covers:**
+  ui/lazy_directory_tree.py
+  HighlightProxyModel,
+  LazyDirectoryTreeWidget,
+  and legacy-API retirement
+  expectations for retired
+  UI placeholders.
+end note
+
+note bottom of test_app_settings
+  **Covers:** app_settings.py
+  AppSettings, SettingsManager,
+  regex compilation & validation
+end note
+
+note bottom of test_about_dialog
+  **Covers:** ui/about_dialog.py
+  _read_version() + dialog
+  rendering/content behavior
+end note
+
+note bottom of test_stop_crash
+  **Regression:** sync/strategies.py
+  stop event check inside
+  worker result iterator loop
+end note
+
+@enduml

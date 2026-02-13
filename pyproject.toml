@@ -1,0 +1,68 @@
+[project]
+name = "compareror"
+version = "1.0.0"
+description = "Desktop application for efficient directory synchronization with visual comparison, filtering, and rollback capabilities"
+readme = "README.md"
+license = {text = "AGPL-3.0-or-later"}
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6>=6.6.0",
+    "PyYAML>=6.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    ".git",
+    ".github",
+    "plans",
+    "architecture",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E722",   # bare except (used in count_lines.py utility)
+    "SIM108", # ternary operator (readability preference)
+    "SIM105", # contextlib.suppress (explicit try/except/pass in cleanup code)
+    "SIM113", # enumerate() suggestion (counters used in complex pool loops)
+    "B905",   # zip strict (py310 compat)
+    "UP007",  # use X | Y for union types (py310 compat with older PyQt6 stubs)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"count_lines.py" = ["RUF001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sync", "ui", "app_settings"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+qt_api = "pyqt6"
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]

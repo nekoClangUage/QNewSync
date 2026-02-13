@@ -1,0 +1,212 @@
+@startuml sequence_sync
+
+<style>
+sequenceDiagram {
+    participant {
+        BackgroundColor #f8f9fa
+        LineColor #343a40
+        RoundCorner 10
+    }
+    actor {
+        BackgroundColor #e3f2fd
+        LineColor #1565c0
+    }
+    database {
+        BackgroundColor #fff3e0
+        LineColor #ef6c00
+    }
+    arrow {
+        LineColor #495057
+        FontColor #495057
+    }
+    group {
+        BackgroundColor #fcfcfc
+        LineColor #dee2e6
+        LineStyle 2
+        RoundCorner 5
+    }
+    note {
+        BackgroundColor #fff9c4
+        LineColor #fbc02d
+    }
+}
+</style>
+
+title Compareror — Synchronization Sequence Diagram\n(current state)
+
+actor User
+participant "MainWindow" as MW
+participant "CompareWorkerThread" as CWT
+participant "SyncWorkerThread" as SWT
+participant "CancelWorkerThread" as XWT
+participant "DirectorySyncModel" as DSM
+participant "StrategyRegistry" as Registry
+participant "DefaultDirectoryScanner" as Scanner
+participant "DiffStrategy\n(mode-dependent)" as Diff
+participant "CachingHashProvider" as Hash
+participant "DefaultSyncExecutor" as Executor
+database "FileSystem" as FS
+
+== Initialization ==
+    User -> MW: Select directories
+    MW -> DSM: set_directories(dir1, dir2)
+    activate DSM
+    DSM -> DSM: validate paths\n(symmetric nesting check)
+    DSM -> DSM: invalidate snapshot cache\n(if paths changed)
+    deactivate DSM
+
+== Comparison Phase (Background Thread) ==
+    User -> MW: Click "Compare"
+    activate MW
+    MW -> CWT: start()
+    activate CWT
+
+    CWT -> DSM: set_progress_callback(handler)
+    CWT -> DSM: compare_directories()
+    activate DSM
+
+    note right of DSM
+      Strategies are **lazy-loaded**
+      from StrategyRegistry on
+      first access
+    end note
+
+    DSM -> Registry: get_default() [scanner]
+    Registry --> DSM: Scanner
+
+    DSM -> Scanner: scan(dir1, exclude=dir2,\nignore_hidden, stop_event)
+    activate Scanner
+    Scanner -> FS: os.scandir() (recursive)
+    Scanner --> DSM: DirectorySnapshot (Source)
+    deactivate Scanner
+
+    DSM -> DSM: _apply_dir1_rules(Source)\n(compiled regex filtering)
+
+    DSM -> Scanner: scan(dir2, exclude=dir1,\nignore_hidden, stop_event)
+    activate Scanner
+    Scanner -> FS: os.scandir() (recursive)
+    Scanner --> DSM: DirectorySnapshot (Target)
+    deactivate Scanner
+
+    note right of DSM: Snapshots are cached for reuse
+
+    DSM -> Registry: get(diff_mode) [diff_strategy]
+    Registry --> DSM: DiffStrategy
+
+    DSM -> Diff: compare(Source, Target, hash_provider,\nstop_event, progress_callback)
+    activate Diff
+
+    opt "Hash needed (strict / two-phase mismatch)"
+        Diff -> Hash: calculate_hashes(files, stop_event)
+        activate Hash
+        Hash -> Hash: check cache (path+size+mtime)
+        Hash -> FS: read + MD5 (multiprocessing Pool)
+        Hash --> Diff: path → hash mapping
+        deactivate Hash
+    end
+
+    Diff --> DSM: DiffResult
+    deactivate Diff
+
+    DSM --> CWT: (files_to_copy, files_to_replace,\nfiles_only_in_target, files_unchanged)
+    deactivate DSM
+
+    CWT --> MW: signal finished(result)
+    deactivate CWT
+    MW -> MW: update LazyDirectoryTreeWidget\nhighlight groups
+    deactivate MW
+
+== Synchronization Phase (Background Thread) ==
+    User -> MW: Click "Synchronize"
+    activate MW
+    MW -> SWT: start()
+    activate SWT
+
+    SWT -> DSM: set_stats_callback(handler)
+    SWT -> DSM: synchronize()
+    activate DSM
+
+    DSM -> DSM: reset_stop()\nclear snapshot cache
+
+    DSM -> Scanner: scan(dir1) → fresh Source
+    DSM -> Scanner: scan(dir2) → fresh Target
+    DSM -> DSM: _apply_dir1_rules(Source)
+    DSM -> Diff: compare(Source, Target, hash_provider)
+    Diff --> DSM: DiffResult
+
+    opt "files_to_replace not empty"
+        DSM -> DSM: create_backup_dir()\n(tempfile.mkdtemp)
+    end
+
+    DSM -> Registry: get_default() [sync_executor]
+    Registry --> DSM: Executor
+
+    DSM -> Executor: execute(DiffResult, backup_dir,\ncopy_empty_dirs, stop_event,\nprogress_callback, stats_callback)
+    activate Executor
+
+    loop "Parallel via multiprocessing Pool"
+        Executor -> FS: check destination path
+        alt "File Replacement"
+            Executor -> FS: backup original → temp dir
+        end
+        Executor -> FS: copy / overwrite file
+        Executor --> SWT: stats_callback(SyncStats)\n(throttled ≤100ms)
+    end
+
+    opt "copy_empty_dirs enabled"
+        loop "Create empty directories"
+            Executor -> FS: mkdir (from DiffResult.directories_to_create)
+        end
+    end
+
+    Executor --> DSM: SyncResult
+    deactivate Executor
+
+    DSM --> SWT: result dict
+    deactivate DSM
+
+    SWT --> MW: signal finished(result)
+    deactivate SWT
+    MW -> MW: show ReportDialog summary
+    deactivate MW
+
+== Rollback (On Cancel / Error) ==
+    User -> MW: Click "Cancel"
+    MW -> DSM: stop()
+    note right of MW
+      cancel_requested = True.
+      Rollback starts only after
+      SyncWorkerThread finishes.
+    end note
+
+    SWT --> MW: signal finished(result)
+    MW -> MW: on_sync_finished()\nif cancel_requested => _start_cancel_thread()
+    MW -> XWT: start()
+    activate XWT
+
+    XWT -> DSM: reset_stop()
+    XWT -> DSM: rollback_changes()
+    activate DSM
+
+    DSM -> Executor: rollback(stop_event,\nprogress_callback)
+    activate Executor
+
+    loop "Restore replaced files"
+        Executor -> FS: restore from backup
+    end
+    loop "Delete copied files"
+        Executor -> FS: delete new file
+    end
+
+    Executor --> DSM: errors list
+    deactivate Executor
+
+    DSM -> DSM: remove empty dirs\ncreated during sync
+    DSM -> DSM: reset tracking state
+
+    DSM --> XWT: errors list
+    deactivate DSM
+    XWT --> MW: signal finished(errors)
+    deactivate XWT
+
+@enduml
