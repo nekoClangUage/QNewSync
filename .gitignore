@@ -17,6 +17,8 @@ __pycache__
 sync_debug.log
 sync_debug.log.*
 .coverage
+Compareror.spec
+settings_export.yaml
 
 dist/
 build/
