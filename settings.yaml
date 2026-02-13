@@ -1,4 +1,4 @@
-theme: dracula
+theme: dark
 ignore_hidden: true
 copy_empty_dirs: false
 diff_mode: strict

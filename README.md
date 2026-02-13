@@ -2,10 +2,29 @@
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![CI](https://github.com/yourusername/compareror/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/compareror/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52.svg)](https://www.riverbankcomputing.com/software/pyqt/)
+[![PyInstaller](https://img.shields.io/badge/build-PyInstaller-yellow.svg)](https://pyinstaller.org/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#prerequisites)
+[![Code style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://docs.astral.sh/ruff/formatter/)
+[![Maintenance](https://img.shields.io/badge/maintenance-active-brightgreen.svg)](#)
+[![Version](https://img.shields.io/badge/version-1.0.0-informational.svg)](#)
 
 > A PyQt6 desktop application for visual directory comparison and safe one-way synchronization (Directory 1 -> Directory 2).
+
+## Screenshots
+
+### Main Window (Dracula Theme)
+
+![Main Window - Dracula Theme](Images/dracula_theme_main.png)
+
+### Settings Dialog (Light Theme)
+
+![Settings Dialog - Light Theme](Images/light_theme_settings.png)
+
+### Synchronization Report
+
+![Synchronization Report](Images/report_functionality.png)
 
 ## Overview
 
