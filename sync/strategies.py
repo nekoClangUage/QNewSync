@@ -29,9 +29,12 @@ import shutil
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Iterable
+from functools import partial
 from multiprocessing import Manager, Pool
+from multiprocessing.managers import EventProxy, SyncManager
+from multiprocessing.pool import Pool as ProcessPool
 from pathlib import Path
-from typing import Any
 
 from sync.interfaces import (
     DiffEntry,
@@ -56,7 +59,6 @@ from sync.interfaces import (
 HashWorkerArgs = tuple[Path, Path]
 HashWorkerResult = tuple[Path, str | None]
 
-CopyWorkerArgs = tuple[Path, Path, Path, bool, str | None, Any]
 CopyWorkerResult = tuple[Path, bool, bool, str | None]
 
 # =============================================================================
@@ -669,8 +671,10 @@ class DefaultSyncExecutor:
         copied_count = 0
         replaced_count = 0
         errors: list[str] = []
-        pool = None
-        manager = None
+        pool: ProcessPool | None = None
+        manager: SyncManager | None = None
+        mp_stop: EventProxy | None = None
+        temporary_directories: dict[Path, Path] = {}
 
         try:
             if all_files:
@@ -681,29 +685,37 @@ class DefaultSyncExecutor:
                 if stop_event and stop_event.is_set():
                     mp_stop.set()
 
-                args_list = []
+                tasks: list[Callable[[], CopyWorkerResult]] = []
                 for path, meta in all_files.items():
-                    is_replace = path in files_to_replace
-                    args_list.append(
-                        (
-                            meta.absolute_path,
-                            diff.target_path / path,
-                            path,
-                            is_replace,
-                            str(self._backup_dir) if self._backup_dir else None,
-                            mp_stop,
+                    is_replace: bool = path in files_to_replace
+                    target_path: Path = diff.target_path / path
+                    temporary_path: Path = _prepare_temporary_path(target_path, temporary_directories)
+                    backup_temporary_path: Path | None = None
+                    if is_replace and self._backup_dir is not None:
+                        backup_temporary_path = _prepare_temporary_path(self._backup_dir / path, temporary_directories)
+                    tasks.append(
+                        partial(
+                            _copy_worker,
+                            source_path=meta.absolute_path,
+                            target_path=target_path,
+                            rel_path=path,
+                            is_replace=is_replace,
+                            backup_dir=self._backup_dir,
+                            mp_stop=mp_stop,
+                            temporary_path=temporary_path,
+                            backup_temporary_path=backup_temporary_path,
                         )
                     )
 
                 pool = Pool(processes=self._num_workers)
-                results = pool.imap_unordered(
-                    _copy_worker,
-                    args_list,
-                    chunksize=max(1, len(args_list) // (self._num_workers * 4)),
+                results: Iterable[CopyWorkerResult] = pool.imap_unordered(
+                    _run_copy_task,
+                    tasks,
+                    chunksize=max(1, len(tasks) // (self._num_workers * 4)),
                 )
 
                 processed = 0
-                total = len(args_list)
+                total = len(tasks)
                 stopping = False
 
                 # Map for quick lookup of file sizes to update stats
@@ -762,7 +774,7 @@ class DefaultSyncExecutor:
                         else:
                             copied_count += 1
                             self._copied_files.add(rel_path)
-                    elif error_msg and error_msg != "Stopped":
+                    if error_msg and error_msg != "Stopped":
                         errors.append(f"{rel_path}: {error_msg}")
 
                     if progress_callback:
@@ -775,19 +787,28 @@ class DefaultSyncExecutor:
             errors.append(f"Sync error: {e!s}")
         finally:
             # 1. Signal workers to stop (redundant but safe)
-            if manager is not None:
+            if mp_stop is not None:
                 try:
                     mp_stop.set()
                 except Exception:
                     pass
 
             # 2. Terminate pool
+            workers_finished: bool = pool is None
             if pool is not None:
                 try:
                     pool.terminate()
                     pool.join()
-                except Exception:
-                    pass
+                    workers_finished = True
+                except Exception as e:
+                    errors.append(f"Failed to finish copy workers: {e}")
+
+            # A terminated worker cannot run its own finally block.
+            if workers_finished:
+                errors.extend(_remove_temporary_files(temporary_directories.values()))
+            elif temporary_directories:
+                paths: str = ", ".join(str(path) for path in temporary_directories.values())
+                errors.append(f"Temporary files retained because copy workers may still be running: {paths}")
 
             # 3. Shutdown manager
             if manager is not None:
@@ -935,27 +956,92 @@ class DefaultSyncExecutor:
         return errors
 
 
-def _copy_worker(args: tuple) -> tuple:
-    """Worker function for parallel file copying."""
-    source_path, target_path, rel_path, is_replace, backup_dir_str, mp_stop = args
+def _prepare_temporary_path(destination_path: Path, temporary_directories: dict[Path, Path]) -> Path:
+    """Reserve a file on the destination filesystem in a directory owned by this execution."""
+    parent_path: Path = destination_path.parent
+    parent_path.mkdir(parents=True, exist_ok=True)
+    if parent_path not in temporary_directories:
+        temporary_directories[parent_path] = Path(tempfile.mkdtemp(prefix=".qnewsync-", dir=parent_path))
+    descriptor: int
+    name: str
+    descriptor, name = tempfile.mkstemp(suffix=".tmp", dir=temporary_directories[parent_path])
+    os.close(descriptor)
+    return Path(name)
+
+
+def _remove_temporary_files(temporary_directories: Iterable[Path]) -> list[str]:
+    """Remove only this execution's staging directories, after all copy workers have exited."""
+    errors: list[str] = []
+    for directory in temporary_directories:
+        try:
+            shutil.rmtree(directory)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            errors.append(f"Failed to remove temporary directory {directory}: {e}")
+    return errors
+
+
+def _run_copy_task(task: Callable[[], CopyWorkerResult]) -> CopyWorkerResult:
+    """Invoke a picklable partial through Pool.imap_unordered's single-argument interface."""
+    return task()
+
+
+def _copy_worker(
+    *,
+    source_path: Path,
+    target_path: Path,
+    rel_path: Path,
+    is_replace: bool,
+    backup_dir: Path | None,
+    mp_stop: EventProxy | StopEvent | None,
+    temporary_path: Path,
+    backup_temporary_path: Path | None,
+) -> CopyWorkerResult:
+    """Stage one file, publish its complete backup, then atomically install the new version.
+
+    Temporary paths are reserved by execute(). This worker unlinks them on normal exit;
+    execute() owns their directories and cleans up after forcibly terminated workers.
+    """
+    success: bool = False
+    error_message: str | None = None
 
     try:
         if mp_stop and mp_stop.is_set():
-            return (rel_path, False, is_replace, "Stopped")
+            error_message = "Stopped"
+        else:
+            shutil.copy2(source_path, temporary_path)
 
-        if is_replace and target_path.exists() and backup_dir_str:
-            backup_path = Path(backup_dir_str) / rel_path
-            backup_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(target_path, backup_path)
+            if mp_stop and mp_stop.is_set():
+                error_message = "Stopped"
+            elif is_replace and target_path.exists() and backup_dir is not None:
+                if backup_temporary_path is None:
+                    raise ValueError("Replacement requires a reserved temporary backup path")
+                backup_path: Path = backup_dir / rel_path
+                shutil.copy2(target_path, backup_temporary_path)
+                if mp_stop and mp_stop.is_set():
+                    error_message = "Stopped"
+                else:
+                    os.replace(backup_temporary_path, backup_path)
 
-        if mp_stop and mp_stop.is_set():
-            return (rel_path, False, is_replace, "Stopped")
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target_path)
-        return (rel_path, True, is_replace, None)
+            if error_message is None:
+                if mp_stop and mp_stop.is_set():
+                    error_message = "Stopped"
+                else:
+                    os.replace(temporary_path, target_path)
+                    success = True
     except Exception as e:
-        return (rel_path, False, is_replace, str(e))
+        error_message = str(e)
+    finally:
+        for path in (temporary_path, backup_temporary_path):
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as e:
+                    cleanup_error: str = f"Failed to remove temporary file {path}: {e}"
+                    error_message = f"{error_message}; {cleanup_error}" if error_message else cleanup_error
+
+    return (rel_path, success, is_replace, error_message)
 
 
 # =============================================================================

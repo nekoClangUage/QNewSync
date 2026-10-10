@@ -37,16 +37,16 @@ Compareror is built around a layered architecture with a strategy-driven synchro
 
 ## Current Architecture Snapshot
 
-Aligned with `architecture/*.puml` and `architecture/ROADMAP.md` (updated Feb 2026):
+The implementation is mapped in the Mermaid diagrams listed below. They describe module dependencies, synchronization ordering and current limitations.
 
 - [x] `ensure_strategies_registered()` bootstrap (once-only, thread-safe registration)
 - [x] Diff modes: `strict`, `two-phase` (default), `fast`
 - [x] `CachingHashProvider` decorator for hash reuse by `(path, size, mtime)`
 - [x] `LazyDirectoryTreeWidget` + `HighlightProxyModel` as active UI tree system
-- [x] Regex filtering with ReDoS protections (nested quantifier + lookbehind checks)
+- [x] Regex filtering with validation of selected risky constructs (nested quantifier + lookbehind checks)
 - [x] Real-time sync statistics in `ReportDialog` (throttled updates)
 - [x] Optional empty-directory propagation (`copy_empty_dirs`)
-- [x] Test suite snapshot: **17 test files / 189 tests**
+- [x] Core and Qt integration tests
 
 ## Architecture Layers
 
@@ -58,16 +58,16 @@ Aligned with `architecture/*.puml` and `architecture/ROADMAP.md` (updated Feb 20
 | Strategy Implementations | `sync/strategies.py` | Default scanner/hash/diff/executor implementations |
 | Configuration | `app_settings.py`, `settings.yaml` | Settings model, validation, YAML persistence, regex rule compilation |
 
-## PlantUML Documentation
+## Technical Documentation and Mermaid Diagrams
 
-See `architecture/` for full diagrams:
+Diagrams in `architecture/` use fenced Mermaid blocks in Markdown:
 
-- `component_diagram.puml` — system-level dependencies and flow
-- `strategy_pattern.puml` — protocol + registry + concrete strategy relationships
-- `sequence_sync.puml` — compare/sync/cancel/rollback runtime sequence
-- `settings_diagram.puml` — settings model, validation, persistence
-- `ui_class_diagram.puml` — UI classes, workers, theme system
-- `test_architecture.puml` — test topology and source coverage mapping
+- [component_diagram.md](architecture/component_diagram.md) — system-level dependencies and flow
+- [strategy_pattern.md](architecture/strategy_pattern.md) — protocols, registries, implementations and data
+- [sequence_sync.md](architecture/sequence_sync.md) — compare/sync/stop/cancel/rollback runtime sequence
+- [settings_diagram.md](architecture/settings_diagram.md) — settings, YAML persistence and filtering
+- [ui_class_diagram.md](architecture/ui_class_diagram.md) — UI classes, workers and theme system
+- [test_architecture.md](architecture/test_architecture.md) — tests mapped to source responsibilities
 
 ## Feature Set
 
@@ -76,7 +76,7 @@ See `architecture/` for full diagrams:
 - [x] Parallel hashing/copying (multiprocessing pool)
 - [x] Hash caching via `CachingHashProvider`
 - [x] Cancel + rollback safety model
-- [x] Regex include/exclude rules with ReDoS-aware validation
+- [x] Regex include/exclude rules with validation of selected risky constructs
 - [x] Hidden-file filtering
 - [x] Empty directory copy support (`copy_empty_dirs`)
 - [x] Theme system (`dark`, `light`, `dracula`) via `ThemeManager`
@@ -207,39 +207,19 @@ compareror/
 │   ├── theme_provider.py
 │   └── constants.py
 ├── architecture/
-│   ├── ROADMAP.md
-│   ├── component_diagram.puml
-│   ├── strategy_pattern.puml
-│   ├── sequence_sync.puml
-│   ├── settings_diagram.puml
-│   ├── ui_class_diagram.puml
-│   └── test_architecture.puml
+│   ├── component_diagram.md
+│   ├── strategy_pattern.md
+│   ├── sequence_sync.md
+│   ├── settings_diagram.md
+│   ├── ui_class_diagram.md
+│   └── test_architecture.md
 ├── tests/
 │   ├── conftest.py
-│   └── test_*.py (17 files / 189 tests)
+│   └── test_*.py
 └── .github/workflows/
     ├── ci.yml
     └── build.yml
 ```
-
-## Roadmap
-
-For details, see [`architecture/ROADMAP.md`](architecture/ROADMAP.md).
-
-### Mid-term (v1.5)
-
-- [ ] SyncContext refactor (operation-scoped stop/progress/stats context)
-- [ ] Executor swapping via config (process vs thread)
-- [ ] Sync profiles
-- [ ] Conflict resolution UI
-- [ ] Headless/CLI mode
-
-### Long-term (v2.0)
-
-- [ ] Cloud backends (S3, SFTP, Google Drive)
-- [ ] Real-time sync (filesystem watchers)
-- [ ] Plugin system
-- [ ] Persistent on-disk hash cache
 
 ## License
 
